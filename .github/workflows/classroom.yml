@@ -1,96 +1,57 @@
-name: Maven CI + Checkstyle + ChatGPT (Main.java only)
+name: Checking lab work
 
-on:
-  push:
-    branches-ignore: [Feedback]
-  pull_request:
-    branches-ignore: [Feedback]
-  workflow_dispatch:
-    inputs:
-      prompt:
-        description: "Промпт для ChatGPT-код-рев'ю"
-        required: false
-        default: "Виступайте в ролі старшого Java-рецензента. Знаходьте дефекти, невірне оформлення та стандарти коду, проблеми паралелізму, запахи коду, відсутні тести, зловживання API та пастки безпеки. Пропонувати мінімальні зміни."
-      model:
-        description: "OpenAI model"
-        required: false
-        default: "gpt-5-nano"
+on: [push]
 
 permissions:
-  contents: write      # push to the Feedback branch
-  pull-requests: read
-
-env:
-  FEEDBACK_BRANCH: Feedback
-  JAVA_VERSION: "21"
+  checks: write
+  actions: read
+  contents: read
 
 jobs:
-  maven-ci-feedback:
+  build:
+    name: Autograding + Static Analysis + ChatGPT
     runs-on: ubuntu-latest
 
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
+    # Секрет доступен на уровне job (org/repo secret с именем OPENAI_API_KEY)
+    env:
+      OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
 
-      - name: Set up Temurin JDK
-        uses: actions/setup-java@v4
+    steps:
+      - uses: actions/checkout@v2
+
+      - uses: actions/setup-java@v3
         with:
           distribution: temurin
-          java-version: ${{ env.JAVA_VERSION }}
+          java-version: '21'
           cache: maven
 
-      # ===== Build & Test =====
-      - name: Build & test with Maven
-        run: mvn -B -ntp -DskipTests=false clean verify
+      # 1) Компиляция проекта
+      - name: Compile (skip tests)
+        run: mvn -B -ntp -DskipTests=true clean package
 
-      # ===== Checkstyle (Maven plugin) =====
-      - name: Run Checkstyle (Maven plugin)
-        run: |
-          set -e
-          mvn -B -ntp checkstyle:checkstyle || true
-          mkdir -p feedback/checkstyle
-          [ -f target/site/checkstyle.html ] && cp -v target/site/checkstyle.html feedback/checkstyle/ || true
-          [ -f target/checkstyle-result.xml ] && cp -v target/checkstyle-result.xml feedback/checkstyle/ || true
+      # 2) Юнит-тесты
+      - name: Run Unit Tests
+        run: mvn -B -ntp test
 
-      # ===== Fallback: Checkstyle CLI (if there's no report) =====
-      - name: Fallback Checkstyle CLI
-        run: |
-          if [ ! -e feedback/checkstyle/checkstyle.html ] && [ ! -e feedback/checkstyle/checkstyle-result.xml ]; then
-            echo "Fallback to Checkstyle CLI..."
-            mkdir -p feedback/checkstyle tmp_checkstyle
-            curl -Ls -o tmp_checkstyle/checkstyle.jar https://github.com/checkstyle/checkstyle/releases/download/checkstyle-10.18.2/checkstyle-10.18.2-all.jar
-            CFG=".checkstyle.xml"
-            if [ ! -f "$CFG" ]; then
-              CFG="tmp_checkstyle/google_checks.xml"
-              curl -Ls -o "$CFG" https://raw.githubusercontent.com/checkstyle/checkstyle/master/src/main/resources/google_checks.xml
-            fi
-            SRCs=""
-            [ -d src/main/java ] && SRCs="$SRCs src/main/java"
-            [ -d src/test/java ] && SRCs="$SRCs src/test/java"
-            [ -z "$SRCs" ] && SRCs="."
-            java -jar tmp_checkstyle/checkstyle.jar -c "$CFG" -f xml -o feedback/checkstyle/checkstyle-result.xml $SRCs || true
-          fi
+      # 3) Checkstyle-отчёт
+      - name: Run Checkstyle
+        run: mvn -B -ntp checkstyle:checkstyle
 
-      - name: Summarize Checkstyle to Markdown
-        run: |
-          mkdir -p feedback
-          REPORT_MD="feedback/checkstyle_summary.md"
-          echo "# Checkstyle Summary" > "$REPORT_MD"
-          if [ -f feedback/checkstyle/checkstyle.html ]; then
-            echo "- HTML report: feedback/checkstyle/checkstyle.html" >> "$REPORT_MD"
-          fi
-          if [ -f feedback/checkstyle/checkstyle-result.xml ]; then
-            VIOLATIONS=$(grep -o "<error " feedback/checkstyle/checkstyle-result.xml | wc -l || echo 0)
-            echo "- Violations (from XML): ${VIOLATIONS}" >> "$REPORT_MD"
-          fi
+      - name: Archive Checkstyle Report
+        uses: actions/upload-artifact@v4
+        with:
+          name: checkstyle-report
+          path: |
+            target/checkstyle-result.xml
+            target/site/checkstyle.html
+          if-no-files-found: warn
 
-      # ===== Collecting ONLY Main.java =====
+      # ==== ChatGPT: ревью только Main.java ====
       - name: Collect Main.java only
         id: target
         run: |
-          git ls-files | grep -E '(^|/)Main\.java$' > java_files_for_review.txt || true
+          # ищем все отслеживаемые файлы с именем Main.java (без учёта регистра пути)
+          git ls-files | grep -Ei '(^|/)Main\.java$' > java_files_for_review.txt || true
           COUNT=$(wc -l < java_files_for_review.txt | xargs)
           echo "Найдено файлов Main.java: $COUNT"
           echo "count=$COUNT" >> $GITHUB_OUTPUT
@@ -99,110 +60,108 @@ jobs:
             echo "Список:"; cat java_files_for_review.txt
           else
             echo "has_files=false" >> $GITHUB_OUTPUT
-            echo "Main.java не найден — ChatGPT шаг будет пропущен."
+            echo "Main.java не найден — ChatGPT шаг создаст заглушку."
           fi
 
-      - name: Install Python deps
-        run: python3 -m pip install --upgrade pip requests
-
-      # ===== ChatGPT: review only Main.java =====
-      - name: ChatGPT code review (OpenAI Responses API)
-        if: ${{ steps.target.outputs.has_files == 'true' && secrets.OPENAI_API_KEY != '' }}
+      - name: ChatGPT code review (Main.java only)
+        # Проверяем только наличие файлов; наличие ключа обрабатываем внутри шага
+        if: ${{ steps.target.outputs.has_files == 'true' }}
         env:
-          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
-          CHATGPT_PROMPT: ${{ github.event.inputs.prompt }}
-          CHATGPT_MODEL: ${{ github.event.inputs.model }}
+          OPENAI_API_KEY: ${{ env.OPENAI_API_KEY }}
         run: |
           set -e
-          mkdir -p feedback
+          mkdir -p chatgpt
+
+          # Если ключ недоступен — создаём заглушку и выходим без ошибки
+          if [ -z "$OPENAI_API_KEY" ]; then
+            {
+              echo "# ChatGPT Review Report (Main.java only)"
+              echo
+              echo "_Not generated._"
+              echo
+              echo "**Reason:** OPENAI_API_KEY is not available to this run."
+            } > chatgpt/chatgpt_report.md
+            exit 0
+          fi
+
+          python3 -m pip install --upgrade pip requests
+
           cat > gpt_review.py << 'PY'
-          import os, json, pathlib
+          import os, json, pathlib, requests
 
           api_key = os.environ["OPENAI_API_KEY"]
-          model   = os.environ.get("CHATGPT_MODEL","gpt-4o-mini")
+          model   = os.environ.get("CHATGPT_MODEL","gpt-5-nano")
           base_prompt = os.environ.get("CHATGPT_PROMPT") or (
-            "Act as a senior Java reviewer. Identify defects, concurrency issues, "
-            "code smells, missing tests, and style problems in the given Main.java. "
-            "Provide concrete suggestions and short unified diffs where helpful."
+            "Act as a senior Java reviewer. Review the given Main.java only. "
+            "Identify defects, concurrency issues, code smells, missing tests, "
+            "API misuse, and style problems. Provide concrete suggestions and short unified diffs."
           )
 
           files = [p.strip() for p in open("java_files_for_review.txt","r",encoding="utf-8").read().splitlines() if p.strip()]
           def load(p):
             try:
-              with open(p,"r",encoding="utf-8",errors="ignore") as f: return f.read()
+              return open(p,"r",encoding="utf-8",errors="ignore").read()
             except Exception as e:
               return f"<<unable to read: {e}>>"
 
-          # ~80k символов на чанку (на случай нескольких Main.java)
           CHUNK_LIMIT = 80000
           chunks, buf = [], f"System prompt:\n{base_prompt}\n\n"
-
           for fp in files:
-            code = load(fp)
-            unit = f"\n\n### FILE: {fp}\n```java\n{code}\n```\n"
+            unit = f"\n\n### FILE: {fp}\n```java\n{load(fp)}\n```\n"
             if len(buf) + len(unit) > CHUNK_LIMIT and buf:
               chunks.append(buf); buf = ""
             buf += unit
-          if buf.strip(): chunks.append(buf)
+          if buf.strip():
+            chunks.append(buf)
 
-          import requests
           headers = {"Authorization": f"Bearer {api_key}", "Content-Type":"application/json"}
           out_md = ["# ChatGPT Review Report (Main.java only)", f"- Model: `{model}`", f"- Files analyzed: {len(files)}"]
 
           for i, payload in enumerate(chunks, start=1):
-            body = {
-              "model": model,
-              "input": [
-                {"role":"system","content":"You are a precise, terse, actionable Java code reviewer."},
-                {"role":"user","content": payload}
-              ],
-            }
-            r = requests.post("https://api.openai.com/v1/responses", headers=headers, data=json.dumps(body), timeout=300)
-            if r.status_code != 200:
-              out_md.append(f"\n\n## Chunk {i}: API error {r.status_code}\n```\n{r.text}\n```")
-              continue
-            data = r.json()
-            text = data.get("output_text")
-            if not text:
-              try:
-                text = data["output"][0]["content"][0]["text"]
-              except Exception:
-                text = json.dumps(data, ensure_ascii=False, indent=2)
-            out_md.append(f"\n\n## Chunk {i}\n{text}")
+            try:
+              r = requests.post(
+                "https://api.openai.com/v1/responses",
+                headers=headers,
+                data=json.dumps({
+                  "model": model,
+                  "input": [
+                    {"role":"system","content":"You are a precise, terse, actionable Java code reviewer."},
+                    {"role":"user","content": payload}
+                  ],
+                }),
+                timeout=300
+              )
+              if r.status_code != 200:
+                out_md.append(f"\n\n## Chunk {i}: API error {r.status_code}\n```\n{r.text}\n```")
+                continue
+              data = r.json()
+              text = data.get("output_text")
+              if not text:
+                try:
+                  text = data["output"][0]["content"][0]["text"]
+                except Exception:
+                  text = json.dumps(data, ensure_ascii=False, indent=2)
+              out_md.append(f"\n\n## Chunk {i}\n{text}")
+            except Exception as e:
+              out_md.append(f"\n\n## Chunk {i}: request failed\n```\n{e}\n```")
 
-          pathlib.Path("feedback/chatgpt_report.md").write_text("\n".join(out_md), encoding="utf-8")
+          pathlib.Path("chatgpt/chatgpt_report.md").write_text("\n".join(out_md), encoding="utf-8")
           PY
           python3 gpt_review.py
 
-      # ===== Collect test reports and Maven site reports (if available) =====
-      - name: Collect test reports
+      # Гарантируем наличие артефакта (даже если выше шаг был пропущен или упал)
+      - name: Ensure ChatGPT report exists (stub if missing)
+        if: always()
         run: |
-          mkdir -p feedback/test-reports
-          [ -d target/surefire-reports ] && cp -r target/surefire-reports feedback/test-reports/ || true
-          [ -d target/failsafe-reports ] && cp -r target/failsafe-reports feedback/test-reports/ || true
-          [ -d target/site ] && cp -r target/site feedback/maven-site || true
-
-      # ===== Commit to Feedback =====
-      - name: Commit feedback to Feedback branch
-        run: |
-          set -e
-          git config user.name  "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-
-          git checkout -B "$FEEDBACK_BRANCH"
-          git add -A feedback
-          if git diff --staged --quiet; then
-            echo "Nothing to commit."
-          else
-            git commit -m "Feedback reports for ${GITHUB_SHA}"
-            git push origin "HEAD:${FEEDBACK_BRANCH}"
+          if [ ! -f chatgpt/chatgpt_report.md ]; then
+            mkdir -p chatgpt
+            printf "# ChatGPT Review Report\n\n_Not generated._\n\n**Reason:** unknown (see logs)\n" > chatgpt/chatgpt_report.md
           fi
 
-      - name: Upload artifacts
+      - name: Upload ChatGPT Report
+        if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: feedback-reports
-          path: |
-            feedback/**
-            java_files_for_review.txt
-          if-no-files-found: warn
+          name: chatgpt-report
+          path: chatgpt/chatgpt_report.md
+          if-no-files-found: error
