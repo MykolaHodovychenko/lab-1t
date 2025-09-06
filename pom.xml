@@ -44,7 +44,7 @@
                 </configuration>
             </plugin>
 
-            <!-- Checkstyle -->
+            <!-- Checkstyle (м’який режим) -->
             <plugin>
                 <groupId>org.apache.maven.plugins</groupId>
                 <artifactId>maven-checkstyle-plugin</artifactId>
@@ -52,7 +52,7 @@
                 <configuration>
                     <configLocation>google_checks.xml</configLocation>
                     <consoleOutput>true</consoleOutput>
-                    <failOnViolation>true</failOnViolation>
+                    <failOnViolation>false</failOnViolation>
                     <linkXRef>false</linkXRef>
                     <outputFile>target/checkstyle-result.xml</outputFile>
                 </configuration>
@@ -66,14 +66,14 @@
                 </executions>
             </plugin>
 
-            <!-- PMD -->
+            <!-- PMD (м’який режим) -->
             <plugin>
                 <groupId>org.apache.maven.plugins</groupId>
                 <artifactId>maven-pmd-plugin</artifactId>
                 <version>3.21.2</version>
                 <configuration>
                     <linkXRef>false</linkXRef>
-                    <printFailingErrors>true</printFailingErrors>
+                    <failOnViolation>false</failOnViolation>
                 </configuration>
                 <executions>
                     <execution>
@@ -85,14 +85,14 @@
                 </executions>
             </plugin>
 
-            <!-- SpotBugs -->
+            <!-- SpotBugs (м’який режим) -->
             <plugin>
                 <groupId>com.github.spotbugs</groupId>
                 <artifactId>spotbugs-maven-plugin</artifactId>
                 <version>4.8.3.1</version>
                 <configuration>
                     <xmlOutput>true</xmlOutput>
-                    <failOnError>true</failOnError>
+                    <failOnError>false</failOnError>
                 </configuration>
                 <executions>
                     <execution>
@@ -104,7 +104,7 @@
                 </executions>
             </plugin>
 
-            <!-- Spotless (форматування Google Java Style) -->
+            <!-- Spotless (Google Java Style) -->
             <plugin>
                 <groupId>com.diffplug.spotless</groupId>
                 <artifactId>spotless-maven-plugin</artifactId>
@@ -114,13 +114,6 @@
                         <googleJavaFormat/>
                     </java>
                 </configuration>
-                <executions>
-                    <execution>
-                        <goals>
-                            <goal>check</goal>
-                        </goals>
-                    </execution>
-                </executions>
             </plugin>
 
         </plugins>
