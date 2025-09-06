@@ -1,11 +1,11 @@
 name: Checking lab work
 
-on: [pull_request]
+on: [push]
 
 permissions:
   checks: write
-  pull-requests: write
   contents: read
+  actions: read
 
 jobs:
   build:
@@ -114,35 +114,15 @@ jobs:
             echo "# ChatGPT Review Report\n\n_Not generated._" > chatgpt/chatgpt_report.md
           fi
 
-      # 7) Collect all reports into a single file
-      - name: Collect reports
-        run: |
-          mkdir -p reports
-          echo "## 🔎 Автоматичний звіт перевірки" > reports/final_report.md
-          echo "### ChatGPT Review" >> reports/final_report.md
-          cat chatgpt/chatgpt_report.md >> reports/final_report.md || true
-          echo -e "\n\n### Checkstyle" >> reports/final_report.md
-          cat target/checkstyle-result.xml >> reports/final_report.md || true
-          echo -e "\n\n### PMD" >> reports/final_report.md
-          cat target/site/pmd.html >> reports/final_report.md || true
-          echo -e "\n\n### SpotBugs" >> reports/final_report.md
-          cat target/spotbugsXml.xml >> reports/final_report.md || true
-
-      # 8) Post reports as PR comments (split if > 60k chars)
-      - name: Post reports to PR
-        if: github.event_name == 'pull_request'
-        uses: actions/github-script@v7
+      # 7) Archive all reports
+      - name: Archive Reports
+        uses: actions/upload-artifact@v4
         with:
-          script: |
-            const fs = require('fs');
-            const content = fs.readFileSync('reports/final_report.md','utf8');
-            const limit = 60000; // безпечний ліміт
-            for (let i=0; i<content.length; i+=limit) {
-              const chunk = content.substring(i, i+limit);
-              await github.rest.issues.createComment({
-                issue_number: context.issue.number,
-                owner: context.repo.owner,
-                repo: context.repo.repo,
-                body: chunk
-              });
-            }
+          name: reports
+          path: |
+            chatgpt/chatgpt_report.md
+            target/checkstyle-result.xml
+            target/site/checkstyle.html
+            target/site/pmd.html
+            target/spotbugsXml.xml
+          if-no-files-found: warn
