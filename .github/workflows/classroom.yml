@@ -97,12 +97,28 @@ jobs:
           headers = {"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"}
           body = {"model": model,"input": text,"instructions": system_instructions,"text":{"format":{"type":"text"}}}
           r = requests.post("https://api.openai.com/v1/responses", headers=headers, data=json.dumps(body))
-          if r.status_code==200:
-              data=r.json()
-              out = data.get("output_text") or ""
-              pathlib.Path("chatgpt/chatgpt_report.md").write_text(out,encoding="utf-8")
+          if r.status_code == 200:
+              data = r.json()
+              out = data.get("output_text")
+
+              # fallback: шукаємо текст у content
+              if not out:
+                  parts = []
+                  for item in data.get("output", []):
+                      for c in item.get("content", []):
+                          if "text" in c:
+                              parts.append(c["text"])
+                  out = "\n".join(parts)
+
+              if not out:
+                  out = "_(No textual content parsed from response)_"
+
+              pathlib.Path("chatgpt/chatgpt_report.md").write_text(out, encoding="utf-8")
           else:
-              pathlib.Path("chatgpt/chatgpt_report.md").write_text(f"API error {r.status_code}",encoding="utf-8")
+              pathlib.Path("chatgpt/chatgpt_report.md").write_text(
+                  f"API error {r.status_code}: {r.text[:500]}",
+                  encoding="utf-8"
+              )
           PY
           python3 gpt_review.py
 
